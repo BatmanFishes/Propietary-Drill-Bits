@@ -1,0 +1,8 @@
+pandas>=2.0.0
+openpyxl>=3.1.0
+oracledb>=1.4.0
+python-pptx>=0.6.21
+numpy>=1.24.0
+pathlib2>=2.3.7
+logging>=0.4.9.6
+datetime
