@@ -44,11 +44,13 @@ class DataMappingConfig:
             # === WELL IDENTIFICATION ===
             'well_name': FieldMapping('well_name', 'Well name or identifier', 'string', required=True),
             'well_number': FieldMapping('well_number', 'Well number', 'string'),
-            'uwi_number': FieldMapping('uwi_number', 'Unique Well Identifier (UWI)', 'string'),
+            'uwi_number': FieldMapping('uwi_number', 'Unique Well Identifier (UWI) - unformatted', 'string'),
+            'uwi_formatted': FieldMapping('uwi_formatted', 'Unique Well Identifier (UWI) - formatted with slashes/dashes', 'string'),
             'license_number': FieldMapping('license_number', 'Drilling license number', 'string'),
             'operator': FieldMapping('operator', 'Operating company', 'string', required=True),
             'contractor': FieldMapping('contractor', 'Drilling contractor', 'string'),
             'rig_name': FieldMapping('rig_name', 'Rig name or number', 'string'),
+            'reporting_rig_name': FieldMapping('reporting_rig_name', 'Combined contractor and rig name', 'string'),
             
             # === LOCATION INFORMATION ===
             'field': FieldMapping('field', 'Field name', 'string'),
@@ -66,6 +68,8 @@ class DataMappingConfig:
             'bit_manufacturer': FieldMapping('bit_manufacturer', 'Bit manufacturer', 'string', required=True),
             'bit_serial_number': FieldMapping('bit_serial_number', 'Bit serial number', 'string'),
             'bit_size_mm': FieldMapping('bit_size_mm', 'Bit size in millimeters', 'numeric', required=True),
+            'bit_size_category': FieldMapping('bit_size_category', 'Bit size category', 'string'),
+            'bit_class': FieldMapping('bit_class', 'Bit class (Common/Other)', 'string'),
             'bit_type': FieldMapping('bit_type', 'Bit type or model', 'string', required=True),
             'iadc_code': FieldMapping('iadc_code', 'IADC classification code', 'string'),
             'bit_style': FieldMapping('bit_style', 'Bit style description', 'string'),
@@ -115,6 +119,20 @@ class DataMappingConfig:
             'formation': FieldMapping('formation', 'Formation drilled', 'string'),
             'td_formation': FieldMapping('td_formation', 'Total depth formation', 'string'),
             
+            # === GDC WELL DATA ===
+            'gdc_bottom_hole_latitude': FieldMapping('gdc_bottom_hole_latitude', 'GDC Bottom hole latitude', 'numeric'),
+            'gdc_bottom_hole_longitude': FieldMapping('gdc_bottom_hole_longitude', 'GDC Bottom hole longitude', 'numeric'),
+            'gdc_drill_td': FieldMapping('gdc_drill_td', 'GDC Drill total depth', 'numeric'),
+            'gdc_final_drill_date': FieldMapping('gdc_final_drill_date', 'GDC Final drill date', 'date'),
+            'gdc_final_td': FieldMapping('gdc_final_td', 'GDC Final total depth', 'numeric'),
+            'gdc_gsl_days_on': FieldMapping('gdc_gsl_days_on', 'GDC GSL days on location', 'numeric'),
+            'gdc_max_tvd': FieldMapping('gdc_max_tvd', 'GDC Maximum true vertical depth', 'numeric'),
+            'gdc_profile_type': FieldMapping('gdc_profile_type', 'GDC Profile type', 'string'),
+            'gdc_rig_release_date': FieldMapping('gdc_rig_release_date', 'GDC Rig release date', 'date'),
+            'gdc_spud_date': FieldMapping('gdc_spud_date', 'GDC Spud date', 'date'),
+            'gdc_surface_latitude': FieldMapping('gdc_surface_latitude', 'GDC Surface latitude', 'numeric'),
+            'gdc_surface_longitude': FieldMapping('gdc_surface_longitude', 'GDC Surface longitude', 'numeric'),
+            
             # === METADATA ===
             'data_source': FieldMapping('data_source', 'Source of the data', 'string', required=True),
             'source_file': FieldMapping('source_file', 'Source file name', 'string'),
@@ -128,13 +146,14 @@ class DataMappingConfig:
             'ulterra': SourceConfig(
                 name='Ulterra',
                 description='Ulterra bit performance data',
-                folder_path='Input/Ulterra',
+                folder_path='../Input/Ulterra',
                 file_pattern='*.xlsx',
                 sheet_name='Bit Runs Export',
                 skip_rows=1,  # Skip the first row (category headers) to get to actual column names
                 column_mappings={
                     'well_name': 'WellName',
-                    'well_number': 'WellNumber',
+                    'uwi_number': 'WellNumber',  # CORRECTED: WellNumber contains UWI data, not well_number
+                    'uwi_formatted': 'WellNumber',  # Added mapping for formatted UWI
                     'license_number': 'APINumber',  # Ulterra's "API numbers" are actually license numbers
                     'operator': 'OperatorName',
                     'contractor': 'ContractorName',
@@ -189,13 +208,14 @@ class DataMappingConfig:
             'reed': SourceConfig(
                 name='Reed Hycalog',
                 description='Reed Hycalog bit performance data',
-                folder_path='Input/Reed',
+                folder_path='../Input/Reed',
                 file_pattern='*.xlsx',
                 sheet_name='All+Montney+since+2020',
                 column_mappings={
                     'well_name': 'Official Well Name',
                     'license_number': 'Lic #',  # Canadian drilling license
                     'uwi_number': 'API/UWI',    # 16-digit Canadian UWI format
+                    'uwi_formatted': 'API/UWI',    # Added mapping for formatted UWI
                     'operator': 'Operator',
                     'contractor': 'Rig Contractor',
                     'rig_name': 'Rig Name',
@@ -232,25 +252,41 @@ class DataMappingConfig:
         return {
             'well_identification': [
                 'well_name', 'well_number', 'uwi_number', 'license_number',
-                'operator', 'contractor', 'rig_name'
+                'operator', 'contractor', 'rig_name', 'reporting_rig_name'
             ],
             'location': [
                 'field', 'county', 'state_province', 'country',
                 'latitude', 'longitude', 'lsd', 'section', 'township', 'range'
             ],
-            'bit_specifications': [
+            'bits': [
+                # === BIT IDENTIFICATION & SPECIFICATIONS ===
                 'bit_manufacturer', 'bit_serial_number', 'bit_size_mm',
-                'bit_type', 'iadc_code', 'bit_style', 'blade_count',
-                'cutter_size', 'tfa'
+                'bit_size_category', 'bit_class', 'bit_type', 'iadc_code', 'bit_style',
+                
+                # === BIT DESIGN DETAILS ===
+                'blade_count', 'cutter_size', 'tfa',
+                
+                # === BIT RUN DETAILS ===
+                'run_number', 'distance_drilled_m', 'drilling_hours',
+                'on_bottom_hours',
+                
+                # === BIT PERFORMANCE METRICS ===
+                'rop_mhr', 'on_bottom_rop_mhr', 'rotating_rop_mhr', 
+                'sliding_rop_mhr', 'sliding_percent',
+                
+                # === BIT CONDITION & DULL GRADING (IADC) ===
+                'dull_inner_row', 'dull_outer_row', 'dull_location',
+                'dull_bearing_seals', 'dull_gauge', 'dull_reason',
+                'dull_characteristics'
             ],
             'run_details': [
-                'run_number', 'run_date', 'spud_date', 'td_date',
-                'depth_in_m', 'depth_out_m', 'distance_drilled_m', 'total_depth_m'
+                'run_date', 'spud_date', 'td_date',
+                'depth_in_m', 'depth_out_m', 'total_depth_m'
             ],
             'performance_metrics': [
-                'drilling_hours', 'on_bottom_hours', 'rop_mhr',
-                'on_bottom_rop_mhr', 'rotating_rop_mhr', 'sliding_rop_mhr',
-                'sliding_percent'
+                'wob_low_dan', 'wob_high_dan', 'torque_low_ftlb',
+                'torque_high_ftlb', 'rpm_low', 'rpm_high',
+                'flow_low_gpm', 'flow_high_gpm'
             ],
             'drilling_parameters': [
                 'wob_low_dan', 'wob_high_dan', 'torque_low_ftlb',
@@ -258,12 +294,20 @@ class DataMappingConfig:
                 'flow_low_gpm', 'flow_high_gpm'
             ],
             'dull_grading': [
+                # Note: Dull grading fields are now included in 'bits' category
+                # This category maintained for backward compatibility
                 'dull_inner_row', 'dull_outer_row', 'dull_location',
                 'dull_bearing_seals', 'dull_gauge', 'dull_reason',
                 'dull_characteristics'
             ],
             'formation': [
                 'formation', 'td_formation'
+            ],
+            'gdc_well_data': [
+                'gdc_bottom_hole_latitude', 'gdc_bottom_hole_longitude',
+                'gdc_drill_td', 'gdc_final_drill_date', 'gdc_final_td', 'gdc_gsl_days_on',
+                'gdc_max_tvd', 'gdc_profile_type', 'gdc_rig_release_date',
+                'gdc_spud_date', 'gdc_surface_latitude', 'gdc_surface_longitude'
             ],
             'metadata': [
                 'data_source', 'source_file', 'file_modified_date', 'record_id'

@@ -164,43 +164,34 @@ class DataIntegrationEngine:
             if field in df.columns:
                 df[field] = pd.to_numeric(df[field], errors='coerce')
         
-        # Source-specific conversions
-        if source_name == 'reed':
-            # Reed data often comes in imperial units - convert to metric
-            df = self._convert_reed_units(df)
-        elif source_name == 'ulterra':
-            # Ulterra data is typically already in metric
-            pass
-        
-        return df
-    
-    def _convert_reed_units(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Convert Reed data from imperial to metric units"""
-        df = df.copy()
-        
-        # Convert bit size from inches to mm (if needed)
-        if 'bit_size_mm' in df.columns:
-            # Check if values look like inches (< 50) vs mm (> 50)
-            sample_values = df['bit_size_mm'].dropna()
-            if len(sample_values) > 0 and sample_values.mean() < 50:
-                print("   🔄 Converting bit size from inches to mm")
-                df['bit_size_mm'] = df['bit_size_mm'] * 25.4
-        
-        # Convert depths from feet to meters (if needed)
-        depth_fields = ['depth_in_m', 'depth_out_m', 'distance_drilled_m']
-        for field in depth_fields:
+        # String conversions for key identifier fields (ensure consistent string format)
+        string_fields = ['license_number', 'bit_serial_number', 'uwi_number', 'uwi_formatted', 'well_name']
+        for field in string_fields:
             if field in df.columns:
-                sample_values = df[field].dropna()
-                if len(sample_values) > 0 and sample_values.mean() > 1000:  # Likely in feet
-                    print(f"   🔄 Converting {field} from feet to meters")
-                    df[field] = df[field] * 0.3048
+                # Convert to string, handling NaN values appropriately
+                df[field] = df[field].astype('object').fillna('').astype(str)
+                # Replace 'nan' strings with actual NaN for pandas operations
+                df[field] = df[field].replace('nan', pd.NA)
         
-        # Convert ROP from ft/hr to m/hr (if needed)
-        if 'rop_mhr' in df.columns:
-            sample_values = df['rop_mhr'].dropna()
-            if len(sample_values) > 0 and sample_values.mean() > 10:  # Likely in ft/hr
-                print("   🔄 Converting ROP from ft/hr to m/hr")
-                df['rop_mhr'] = df['rop_mhr'] * 0.3048
+        # Source-specific processing
+        if source_name == 'reed':
+            # Reed data is assumed to be in correct metric units
+            print("   ✅ Reed data processing - no unit conversion")
+            # Standardize dull grade values for consistency with Ulterra
+            df = self._standardize_dull_grades(df)
+            # Standardize bit manufacturer names
+            df = self._standardize_bit_manufacturers(df)
+            # Standardize contractor names and create combined rig names
+            df = self._standardize_contractors(df)
+        elif source_name == 'ulterra':
+            # Ulterra data is in metric units
+            print("   ✅ Ulterra data processing - no unit conversion")
+            # Ulterra dull grades are already in standard format
+            print("   ✅ Ulterra dull grades already in standard format")
+            # Standardize bit manufacturer abbreviations to full names
+            df = self._standardize_bit_manufacturers(df)
+            # Standardize contractor names and create combined rig names
+            df = self._standardize_contractors(df)
         
         return df
     
@@ -270,15 +261,8 @@ class DataIntegrationEngine:
                 year_field = date_field.replace('_date', '_year')
                 df[year_field] = df[date_field].dt.year
         
-        # Create bit size categories
-        if 'bit_size_mm' in df.columns:
-            df['bit_size_category'] = pd.cut(
-                df['bit_size_mm'],
-                bins=[0, 100, 150, 200, 250, 300, 400, float('inf')],
-                labels=['<100mm', '100-150mm', '150-200mm', '200-250mm', 
-                       '250-300mm', '300-400mm', '>400mm'],
-                include_lowest=True
-            )
+        # Create improved bit size categories based on common drilling sizes
+        df = self._create_improved_bit_size_categories(df)
         
         # Performance efficiency metrics
         if 'rop_mhr' in df.columns and 'drilling_hours' in df.columns:
@@ -439,6 +423,241 @@ class DataIntegrationEngine:
             'avg_rop': df['rop_mhr'].mean(),
             'total_distance_drilled': df['distance_drilled_m'].sum()
         }
+    
+    def _standardize_dull_grades(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Standardize dull grade values for consistency between Reed and Ulterra"""
+        df = df.copy()
+        
+        # Standardize dull gauge values: Reed's 'I' should become 'IN' to match Ulterra
+        if 'dull_gauge' in df.columns:
+            # Count conversions for logging
+            i_count = (df['dull_gauge'] == 'I').sum()
+            
+            if i_count > 0:
+                # Convert Reed's 'I' to 'IN' to match Ulterra's format
+                df['dull_gauge'] = df['dull_gauge'].replace('I', 'IN')
+                print(f"   🔧 Standardized dull_gauge: 'I' → 'IN' ({i_count} records)")
+                
+                # Track total standardizations
+                total_standardizations = i_count
+                print(f"   ✅ Total dull grade standardizations: {total_standardizations}")
+        
+        return df
+    
+    def _standardize_bit_manufacturers(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Standardize bit manufacturer names for consistency between Reed and Ulterra"""
+        df = df.copy()
+        
+        # Define mapping from Ulterra abbreviations to standard full names
+        manufacturer_mapping = {
+            # Ulterra abbreviations to full names (matching Reed format)
+            'BH': 'BAKER HUGHES',
+            'NOV': 'REED HYCALOG',  # NOV owns Reed Hycalog brand
+            'ULT': 'ULTERRA',
+            'SLB': 'SCHLUMBERGER',
+            'HAL': 'HALLIBURTON',
+            'SHR': 'SHEAR BITS',
+            'DF': 'DRILFORMANCE',
+            'OTH': 'OTHER',
+            'TRX': 'TAUREX',
+            'VAR': 'VAREL INTERNATIONAL',
+            'KD': 'KING DREAM',
+            'HAC': 'BAKER HUGHES',  # Hughes Christensen is part of Baker Hughes
+            'DRM': 'DREAM',
+            
+            # Reed standardizations (fixing variations and grouping by parent companies)
+            'REEDHYCALOG': 'REED HYCALOG',
+            'NATIONAL OILWELL VARCO': 'REED HYCALOG',  # Group NOV under Reed Hycalog brand
+            'HUGHES CHRISTENSEN': 'BAKER HUGHES',  # Hughes Christensen is part of Baker Hughes
+            'SMITH BITS': 'SMITH',  # Smith is part of Schlumberger group
+            'SECURITY DIAMANT BOART STRATABIT': 'HALLIBURTON',  # Security DBS is part of Halliburton
+            'J AND L SUPPLY CO. LTD.': 'J&L SUPPLY',
+            'KITTERS BIT SUPPLY': 'KITTERS',
+        }
+        
+        if 'bit_manufacturer' in df.columns:
+            # Count conversions for logging
+            conversions = 0
+            original_values = df['bit_manufacturer'].value_counts()
+            
+            # Apply standardization
+            df['bit_manufacturer'] = df['bit_manufacturer'].replace(manufacturer_mapping)
+            
+            # Count how many values were actually changed
+            new_values = df['bit_manufacturer'].value_counts()
+            for orig_name, mapped_name in manufacturer_mapping.items():
+                if orig_name in original_values and orig_name != mapped_name:
+                    conversions += original_values[orig_name]
+            
+            if conversions > 0:
+                print(f"   🔧 Standardized bit_manufacturer names ({conversions} records)")
+                
+                # Show some examples of conversions
+                examples = []
+                for orig, new in manufacturer_mapping.items():
+                    if orig != new and orig in original_values:
+                        examples.append(f"'{orig}' → '{new}' ({original_values[orig]})")
+                
+                if examples:
+                    print(f"   📝 Key conversions: {', '.join(examples[:5])}")
+                    if len(examples) > 5:
+                        print(f"   📝 ... and {len(examples) - 5} more")
+        
+        return df
+
+    def _standardize_contractors(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Standardize contractor names and create combined rig names"""
+        df = df.copy()
+        
+        # Define mapping for contractor name standardization
+        contractor_mapping = {
+            # Standardize common contractor variations
+            'ENSIGN DRILLING': 'Ensign Drilling',
+            'ENSIGN': 'Ensign Drilling',
+            'PRECISION DRILLING': 'Precision Drilling',
+            'PRECISION': 'Precision Drilling',
+            'FOX DRILLING INC.': 'Fox Drilling',
+            'FOX DRILLING': 'Fox Drilling',
+            'SAVANNA DRILLING': 'Savanna Drilling',
+            'SAVANNA': 'Savanna Drilling',
+            'AKITA DRILLING': 'Akita Drilling',
+            'AKITA': 'Akita Drilling',
+            'TRINIDAD DRILLING': 'Trinidad Drilling',
+            'TRINIDAD': 'Trinidad Drilling',
+            'NORTHERN BLIZZARD DRILLING': 'Northern Blizzard Drilling',
+            'NORTHERN BLIZZARD': 'Northern Blizzard Drilling',
+            'INDEPENDENCE DRILLING CORPORATION': 'Independence Drilling',
+            'INDEPENDENCE': 'Independence Drilling',
+            'TOTAL DRILLING SOLUTIONS': 'Total Drilling Solutions',
+            'TOTAL DRILLING': 'Total Drilling Solutions',
+        }
+        
+        if 'contractor' in df.columns:
+            # Count conversions for logging
+            conversions = 0
+            original_values = df['contractor'].value_counts()
+            
+            # First standardize specific mappings
+            df['contractor'] = df['contractor'].replace(contractor_mapping)
+            
+            # Then apply title case to all remaining contractor names
+            df['contractor'] = df['contractor'].astype(str).apply(
+                lambda x: x.title() if pd.notna(x) and x != 'nan' else x
+            )
+            
+            # Count how many values were actually changed
+            for orig_name, mapped_name in contractor_mapping.items():
+                if orig_name in original_values and orig_name != mapped_name:
+                    conversions += original_values[orig_name]
+            
+            if conversions > 0:
+                print(f"   🔧 Standardized contractor names ({conversions} records)")
+        
+        # Create combined rig name field (format: "Contractor Rig#")
+        if 'contractor' in df.columns and 'rig_name' in df.columns:
+            def create_combined_rig_name(row):
+                contractor = row.get('contractor', '')
+                rig_name = row.get('rig_name', '')
+                
+                # Handle missing values
+                if pd.isna(contractor) or contractor == 'nan':
+                    contractor = ''
+                if pd.isna(rig_name) or rig_name == 'nan':
+                    rig_name = ''
+                
+                # Create combined name with single space
+                if contractor and rig_name:
+                    return f"{contractor} {rig_name}"
+                elif contractor:
+                    return contractor
+                elif rig_name:
+                    return str(rig_name)
+                else:
+                    return ''
+            
+            df['reporting_rig_name'] = df.apply(create_combined_rig_name, axis=1)
+            
+            # Log creation of combined field
+            combined_count = df['reporting_rig_name'].notna().sum()
+            print(f"   🏗️  Created reporting_rig_name field ({combined_count} records)")
+        
+        return df
+
+    def _create_improved_bit_size_categories(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Create improved bit size categories based on common drilling bit sizes"""
+        df = df.copy()
+        
+        def categorize_bit_size(size):
+            """Categorize bit size into functional drilling groups"""
+            if pd.isna(size):
+                return 'Unknown', 'Other'
+            
+            # Primary categories (Common bit sizes) - simplified names
+            if 153 <= size <= 162:
+                return '158mm', 'Common'  # 6.125" bit group
+            elif 167 <= size <= 177:
+                return '171mm', 'Common'  # 6.75" bit group  
+            elif 197 <= size <= 207:
+                return '200mm', 'Common'  # 8" bit group
+            elif 217 <= size <= 227:
+                return '222mm', 'Common'  # 8.75" bit group
+            elif 247 <= size <= 257:
+                return '251mm', 'Common'  # 10" bit group
+            elif 275 <= size <= 285:
+                return '279mm', 'Common'  # 11" bit group
+            elif 307 <= size <= 317:
+                return '311mm', 'Common'  # 12.25" bit group
+            elif 345 <= size <= 355:
+                return '349mm', 'Common'  # 14" bit group
+            elif 205 <= size <= 220:
+                return '215mm', 'Common'  # Mid-range common size
+            
+            # Secondary categories (Other sizes)
+            elif size < 150:
+                return '<150mm', 'Other'
+            elif 160 <= size <= 170:
+                return '160-170mm', 'Other'
+            elif 175 <= size <= 200:
+                return '175-200mm', 'Other'
+            elif 225 <= size <= 250:
+                return '225-250mm', 'Other'
+            elif 255 <= size <= 275:
+                return '255-275mm', 'Other'
+            elif 285 <= size <= 310:
+                return '285-310mm', 'Other'
+            elif 315 <= size <= 345:
+                return '315-345mm', 'Other'
+            elif size > 355:
+                return '>355mm', 'Other'
+            else:
+                return 'Other', 'Other'
+        
+        if 'bit_size_mm' in df.columns:
+            # Apply categorization to get both category and class
+            categories_and_classes = df['bit_size_mm'].apply(categorize_bit_size)
+            
+            # Split into separate columns
+            df['bit_size_category'] = categories_and_classes.apply(lambda x: x[0] if isinstance(x, tuple) else x)
+            df['bit_class'] = categories_and_classes.apply(lambda x: x[1] if isinstance(x, tuple) else 'Other')
+            
+            # Log the categorization results
+            category_counts = df['bit_size_category'].value_counts()
+            class_counts = df['bit_class'].value_counts()
+            total_categorized = df['bit_size_category'].notna().sum()
+            
+            print(f"   🏷️  Updated bit_size_category ({total_categorized} records)")
+            print(f"   📊 Bit classes: {dict(class_counts)}")
+            
+            # Show top categories
+            common_categories = df[df['bit_class'] == 'Common']['bit_size_category'].value_counts().head(3)
+            if len(common_categories) > 0:
+                examples = []
+                for cat, count in common_categories.items():
+                    pct = (count / total_categorized * 100) if total_categorized > 0 else 0
+                    examples.append(f"{cat}: {count} ({pct:.1f}%)")
+                print(f"   🎯 Top common sizes: {', '.join(examples)}")
+        
+        return df
 
 def main():
     """Main function to demonstrate the integration engine"""
